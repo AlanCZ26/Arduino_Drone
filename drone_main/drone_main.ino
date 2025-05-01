@@ -13,7 +13,7 @@ unsigned long currentTime, previousTime;
 float deltaT;
 
 const byte pins[6] = {2, 4, 7, 8, 12, 13};
-byte pwms[6] = {-1, -1, -1, -1, -1, -1};
+short pwms[6] = {-1, -1, -1, -1, -1, -1};
 //unsigned pulseLength; // = pulseIn(9, LOW, 55000UL) + pulseIn(9, HIGH, 55000UL);
 unsigned long pwmsTimeCounter[6] = {};
 bool pwmsTimeTracker[6] = {};
@@ -23,6 +23,13 @@ byte pulseSkipChecker = 100;
 byte printer_counter = 0;
 
 float err_x, err_y, err_z, err_ax, err_ay;
+
+#include <Servo.h>
+Servo esc1;
+Servo esc2;
+Servo esc3;
+Servo esc4;
+Servo* esc_ary[] = {&esc1, &esc2, &esc3, &esc4};
 
 void setup() 
 {
@@ -55,8 +62,12 @@ void setup()
   */
   Serial.println(" === Calibrating... ===");
   calculate_IMU_error(500, err_x, err_y, err_z, err_ax, err_ay);
-  Serial.println(" === Calibrated ===");
+  Serial.println(" === Calibrated, Waiting for RX ===");
   delay(20);
+  esc1.attach(3);
+  esc2.attach(5);
+  esc3.attach(6);
+  esc4.attach(9);
 }
 
 unsigned long cycleTimeTracker;
@@ -65,15 +76,24 @@ void loop()
   cycleTimeTracker = micros();
   readMPU();
   getPWMfaster();
+
+  int k = (pwms[2]);
+  if (k < 1100) k = 1000;
+  if (k > 2000) k = 2000;
+  for (const auto& esc : esc_ary) {
+    esc->writeMicroseconds(k);
+  }
+
   if (++printer_counter > 10) { // Print the values on the serial monitor
     printer_counter = 0;
     for (const byte& PWM : pwms) {
       Serial.print(PWM);
       Serial.print(" | ");
     }
+    Serial.print("psk: ");
     Serial.print(pulseSkipChecker);
-    Serial.print(" ");
-    Serial.println(averageCycleTime); 
+    Serial.print(" act: ");
+    Serial.println(averageCycleTime / 1000.0); 
     
     Serial.print(roll);
     Serial.print("/");
@@ -82,8 +102,13 @@ void loop()
     Serial.print(yaw);
     Serial.print("- ");
     Serial.println(gforce);
+    
+  
+    Serial.print("sent: ");
+    Serial.println(k);
   }
   averageCycleTime = (averageCycleTime * 0.99) + ((micros() - cycleTimeTracker) * 0.01);
+  
 }
 
 
@@ -125,20 +150,20 @@ void getPWMfaster() {
   bool current;
   unsigned long t = micros();
   bool c[6] = {false, false, false, false, false, false};
-  while (!(c[0]&&c[1]&&c[2]&&c[3]&&c[4]&&c[5])) {
+  while (!(c[0]&&c[1]&&c[2]&&c[3]&&c[4]&&c[5])) { // until every pin has return positive
     for (byte i = 0; i < 6; i++) {
       current = (digitalRead(pins[i]) == 1);
       t = micros();
 
-      if (current && !pwmsTimeTracker[i]) {
+      if (current && !pwmsTimeTracker[i]) { // rising edge
         pulseSkipChecker++;
         //pulseLength = (t - pwmsTimeCounter[i]) / 1000; // Pulse length in ms
-        pwmsTimeCounter[i] = t;// Measure the rising edge
+        pwmsTimeCounter[i] = t;// Note rising edge timing
       }
-      else if (!current && pwmsTimeTracker[i]) {
+      else if (!current && pwmsTimeTracker[i]) { // falling edge
         pulseSkipChecker--;
         if ((t - pwmsTimeCounter[i]) < 2200) { // the value should never be over 2000 so if it is the latest rising edge was missed
-          pwms[i] = ((t - pwmsTimeCounter[i]) / 10); // Measure the falling edge
+          pwms[i] = ((pwms[i] * 0.9) + ((t - pwmsTimeCounter[i]) * 0.1)); // Measured uptime, filtered with previous for stability
           c[i] = true;
         }
       }
